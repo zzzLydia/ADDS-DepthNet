@@ -48,28 +48,6 @@ class SIMSE(nn.Module):
         return simse
 
 
-class OrthoLoss(nn.Module):
-
-    def __init__(self):
-        super(OrthoLoss, self).__init__()
-
-    def forward(self, input1, input2):
-
-        batch_size = input1.size(0)
-        input1 = input1.view(batch_size, -1)
-        input2 = input2.view(batch_size, -1)
-
-        input1_l2 = input1
-        input2_l2 = input2
-        
-        ortho_loss = 0
-        dim = input1.shape[1]
-        for i in range(input1.shape[0]):
-            ortho_loss += torch.mean(((input1_l2[i:i+1,:].mm(input2_l2[i:i+1,:].t())).pow(2))/dim)
-
-        ortho_loss = ortho_loss / input1.shape[0]
-
-        return ortho_loss
 
 
 class Trainer:
@@ -85,8 +63,8 @@ class Trainer:
 
         self.models = {}
         self.parameters_to_train = []
-
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        self.device="cuda:0"
+        #self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -101,8 +79,8 @@ class Trainer:
 
         if self.opt.only_depth_encoder:
             self.opt.frame_ids = [0]
-
-        self.models["encoder"] = networks.ResnetEncoder(
+#enoder type &num of layers
+            self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
