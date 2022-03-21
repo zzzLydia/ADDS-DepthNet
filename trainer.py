@@ -85,13 +85,40 @@ class Trainer:
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
 
-
+#decoder type &num of layers (day & night)       
         if not self.opt.only_depth_encoder:
-            self.models["depth"] = networks.DepthDecoder(
+            self.models["depth_day"] = networks.DepthDecoder(
                 self.models["encoder"].num_ch_enc, self.opt.scales)
-            self.models["depth"].to(self.device)
-            self.parameters_to_train += list(self.models["depth"].parameters())
-
+            self.models["depth_day"].to(self.device)
+            self.parameters_to_train += list(self.models["depth_day"].parameters())
+            
+            self.models["depth_night"] = networks.DepthDecoder(
+                self.models["encoder"].num_ch_enc, self.opt.scales)
+            self.models["depth_night"].to(self.device)
+            self.parameters_to_train += list(self.models["depth_night"].parameters())
+            
+            
+#initial decoder type & whether to use (day and night)
+        if self.opt.use_intial_pred:
+            self.models["initial_day"] = networks.DepthDecoder(
+                self.models["encoder"].num_ch_enc, self.opt.scales)
+            self.models["initial_day"].to(self.device)
+            self.parameters_to_train += list(self.models["initial_day"].parameters())
+            
+            self.models["initial_night"] = networks.DepthDecoder(
+                self.models["encoder"].num_ch_enc, self.opt.scales)
+            self.models["initial_night"].to(self.device)
+            self.parameters_to_train += list(self.models["initial_night"].parameters())
+            
+            
+            
+            
+#SAB type & whether to use        
+        if self.opt.use_SAB:
+            self.models["SAB"] = networks.SABlock()
+            self.models["SAB"].to(self.device)
+            self.parameters_to_train += list(self.models["SAB"].parameters())
+#pose network type    
         if self.use_pose_net and not self.opt.only_depth_encoder:
             if self.opt.pose_model_type == "separate_resnet":
                 self.models["pose_encoder"] = networks.ResnetEncoder_pose(
@@ -117,6 +144,8 @@ class Trainer:
 
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
+            
+# predictive mask
 
         if self.opt.predictive_mask and not self.opt.only_depth_encoder:
             assert self.opt.disable_automasking, \
@@ -129,7 +158,7 @@ class Trainer:
                 num_output_channels=(len(self.opt.frame_ids) - 1))
             self.models["predictive_mask"].to(self.device)
             self.parameters_to_train += list(self.models["predictive_mask"].parameters())
-
+# optimizer & scheduler
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
@@ -140,12 +169,12 @@ class Trainer:
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using:\n  ", self.device)
-
+# data path
         # data
         datasets_dict = {"kitti": datasets.KITTIRAWDataset,
                          "kitti_odom": datasets.KITTIOdomDataset}
         self.dataset = datasets_dict[self.opt.dataset]
-
+#split txt reading
         fpath = os.path.join(os.path.dirname(__file__), "splits", self.opt.split, "{}_files.txt")
 
         train_filenames = readlines(fpath.format("train"))
