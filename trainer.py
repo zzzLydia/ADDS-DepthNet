@@ -180,12 +180,14 @@ class Trainer:
         train_filenames = readlines(fpath.format("train"))
         # val_all_filenames = readlines(fpath.format("val_all"))
         val_day_filenames = readlines(fpath.format("val_day"))
+        val_fake_night_filenames = readlines(fpath.format("val_fake_night"))
         val_night_filenames = readlines(fpath.format("val_night"))
+        val_fake_day_filenames = readlines(fpath.format("val_fake_day"))
         img_ext = '.png' if self.opt.png else '.jpg'
-
+# counting
         num_train_samples = len(train_filenames)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
-
+#dataset & dataloader making
         train_dataset = self.dataset(self.opt,
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=True, img_ext=img_ext)
@@ -210,7 +212,7 @@ class Trainer:
             val_night_dataset, self.opt.batch_size, False,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=False)
         self.val_iter_night = iter(self.val_night_loader)
-
+#tensorboard's summary writer
         self.writers = {}
         for mode in ["train", "val_day", "val_night"]:
             self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
@@ -218,6 +220,9 @@ class Trainer:
         if not self.opt.no_ssim:
             self.ssim = SSIM()
             self.ssim.to(self.device)
+            
+# BackprojectDepth; Layer to transform a depth image into a point cloud
+# Project3D: Layer which projects 3D points into a camera with intrinsics K and at position T
 
         self.backproject_depth = {}
         self.project_3d = {}
