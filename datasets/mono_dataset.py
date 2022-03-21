@@ -115,7 +115,8 @@ class MonoDataset(data.Dataset):
 
     def __getitem__(self, index):
         """Returns a single training item from the dataset as a dictionary.
-
+        
+#change variable of filename(1 to 2), return 2 pic once
         Values correspond to torch tensors.
         Keys in the dictionary are either strings or tuples:
 
