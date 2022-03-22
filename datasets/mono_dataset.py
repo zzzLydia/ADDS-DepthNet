@@ -65,7 +65,7 @@ class MonoDataset(data.Dataset):
 
         self.loader = pil_loader
         self.to_tensor = transforms.ToTensor()
-
+# transform
         # We need to specify augmentations differently in newer versions of torchvision.
         # We first try the newer tuple version; if this fails we fall back to scalars
         try:
@@ -96,6 +96,7 @@ class MonoDataset(data.Dataset):
         images in this item. This ensures that all images input to the pose network receive the
         same augmentation.
         """
+    #introduce color_aug to input dict
         for k in list(inputs):
             frame = inputs[k]
             if "color" in k or "color_n" in k:
@@ -117,6 +118,8 @@ class MonoDataset(data.Dataset):
         """Returns a single training item from the dataset as a dictionary.
         
 #change variable of filename(1 to 2), return 2 pic once
+
+
         Values correspond to torch tensors.
         Keys in the dictionary are either strings or tuples:
 
@@ -139,24 +142,25 @@ class MonoDataset(data.Dataset):
             3       images resized to (self.width // 8, self.height // 8)
         """
         inputs = {}
-
+#transform
         do_color_aug = self.is_train and random.random() > 0.5
         do_flip = self.is_train and random.random() > 0.5
+#split each line in txt:  eg；day_train_all/0000000315
 
-        line = self.filenames[index].split('/')
-        folder = line[0]
+        line = self.filenames[index].split('/') #line=['day_train_all','0000000315']
+        folder = line[0] # folder='day_train_all'
 
         # if len(line) == 3:
-        frame_index = int(line[1])
+        frame_index = int(line[1]) #frame_index=0000000315
         # else:
         #     frame_index = 0
 
-        istrain = folder.split('_')[1]
+        istrain = folder.split('_')[1] # istrain=train
 
         if istrain == 'train':
             # add fake imgs (be paired), and be sure that folder is day, folder2 is night
-            if folder[0] == 'd':
-                folder2 = folder + '_fake_night'
+            if folder[0] == 'd': # folder=day_train_all
+                folder2 = folder + '_fake_night' # folder=day_train_all_fake_night
                 flag = 0
             else:
                 folder2 = folder + '_fake_day'
@@ -170,17 +174,17 @@ class MonoDataset(data.Dataset):
             else:
                 side = None
 
-            for i in self.frame_idxs:
+            for i in self.frame_idxs: # default=[0, -1, 1]
                 if i == "s":
                     other_side = {"r": "l", "l": "r"}[side]
                     inputs[("color", i, -1)] = self.get_color(folder, frame_index, other_side, do_flip)
                     inputs[("color_n", i, -1)] = self.get_color(folder2, frame_index, other_side, do_flip)
                 else:
-                    inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip)
-                    inputs[("color_n", i, -1)] = self.get_color(folder2, frame_index + i, side, do_flip)
+                    inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip) # a color image
+                    inputs[("color_n", i, -1)] = self.get_color(folder2, frame_index + i, side, do_flip) #frame index is 10-digit, not 0 -1 1
                     # plt.imsave('img.jpg',np.squeeze(np.array(inputs[("color", i, -1)])).astype(np.uint8))
                     # print(i)
-
+# related to camera intrinsic, just use default
             # adjusting intrinsics to match each scale in the pyramid
             for scale in range(self.num_scales):
                 K = self.K.copy()
@@ -189,7 +193,7 @@ class MonoDataset(data.Dataset):
                 K[1, :] *= self.height // (2 ** scale)
 
                 inv_K = np.linalg.pinv(K)
-
+# introduction of K or inv_K
                 inputs[("K", scale)] = torch.from_numpy(K)
                 inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
@@ -198,16 +202,16 @@ class MonoDataset(data.Dataset):
                     self.brightness, self.contrast, self.saturation, self.hue)
             else:
                 color_aug = (lambda x: x)
-
+# introduction of color_aug
             self.preprocess(inputs, color_aug)
-
+#delete image loaded from disk (because we have image size as opt)
             for i in self.frame_idxs:
                 del inputs[("color", i, -1)]
                 del inputs[("color_aug", i, -1)]
                 del inputs[("color_n", i, -1)]
                 del inputs[("color_n_aug", i, -1)]
 
-            istrain = folder.split('_')[1]
+            istrain = folder.split('_')[1] #folder='day_train_all' dayflag=0 nighrflag=1 here always0
             if istrain != 'train':
                 if flag:
                     depth_gt = self.get_depth(folder2, frame_index, side, do_flip)
@@ -226,7 +230,19 @@ class MonoDataset(data.Dataset):
 
             # plt.imsave('img.jpg', np.squeeze(np.array(inputs[("color", 0, 0)])).astype(np.uint8))
             # print(i)
-        else:
+        else: #day_val_451/0000030525 line=['day_val_451','0000030525']
+            
+            if folder[0] == 'd':    # folder=day_val_451
+                folder2 = folder + '_fake_night'     # folder=day_val_451_fake_night
+                flag = 0
+            else:
+                folder2 = folder + '_fake_day'
+                tmp = folder
+                folder = folder2
+                folder2 = tmp
+                flag = 1
+                
+                
             if len(line) == 3:
                 side = line[2]
             else:
@@ -236,10 +252,15 @@ class MonoDataset(data.Dataset):
                 if i == "s":
                     other_side = {"r": "l", "l": "r"}[side]
                     inputs[("color", i, -1)] = self.get_color(folder, frame_index, other_side, do_flip)
+                    inputs[("color_n", i, -1)] = self.get_color(folder2, frame_index, other_side, do_flip)
+                    
                 else:
                     inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip)
+                    inputs[("color_n", i, -1)] = self.get_color(folder2, frame_index + i, side, do_flip)
 
             # adjusting intrinsics to match each scale in the pyramid
+# related to camera intrinsic, just use default
+
             for scale in range(self.num_scales):
                 K = self.K.copy()
 
@@ -247,7 +268,7 @@ class MonoDataset(data.Dataset):
                 K[1, :] *= self.height // (2 ** scale)
 
                 inv_K = np.linalg.pinv(K)
-
+# introduction of K or inv_K
                 inputs[("K", scale)] = torch.from_numpy(K)
                 inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
@@ -256,17 +277,25 @@ class MonoDataset(data.Dataset):
                     self.brightness, self.contrast, self.saturation, self.hue)
             else:
                 color_aug = (lambda x: x)
-
+# introduction of color_aug
             self.preprocess(inputs, color_aug)
 
             for i in self.frame_idxs:
                 del inputs[("color", i, -1)]
                 del inputs[("color_aug", i, -1)]
+                del inputs[("color_n", i, -1)]
+                del inputs[("color_n_aug", i, -1)]
 
 
-            depth_gt = self.get_depth(folder, frame_index, side, do_flip)
+            if flag:
+                depth_gt = self.get_depth(folder2, frame_index, side, do_flip)
+            else:
+                depth_gt = self.get_depth(folder, frame_index, side, do_flip)
             inputs["depth_gt"] = np.expand_dims(depth_gt, 0)
             inputs["depth_gt"] = torch.from_numpy(inputs["depth_gt"].astype(np.float32))
+                
+                
+                
 
             if "s" in self.frame_idxs:
                 stereo_T = np.eye(4, dtype=np.float32)
@@ -287,3 +316,6 @@ class MonoDataset(data.Dataset):
 
     def get_depth(self, folder, frame_index, side, do_flip):
         raise NotImplementedError
+        
+        
+        
