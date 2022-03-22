@@ -98,6 +98,7 @@ def convt_bn_relu(in_channels, out_channels, kernel_size, \
     return layers
 
 
+
 class ResnetEncoder(nn.Module):
     """Pytorch module for a resnet encoder
     """
@@ -114,7 +115,9 @@ class ResnetEncoder(nn.Module):
 
         if num_layers not in resnets:
             raise ValueError("{} is not a valid number of resnet layers".format(num_layers))
-
+        ##########################################
+        # shared encoder
+        ##########################################
         if num_input_images > 1:
             self.encoder = resnet_multiimage_input(num_layers, pretrained, num_input_images)
         else:
@@ -122,74 +125,19 @@ class ResnetEncoder(nn.Module):
 
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4
-
-        ######################################
-        # night public first conv
-        ######################################
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
 
-        self.conv_shared = nn.Conv2d(512, 64, kernel_size=1)
-
-        ##########################################
-        # private encoder, day
-        ##########################################
-        self.encoder_day = resnets[num_layers](pretrained)
-        self.conv_diff_day = nn.Conv2d(512, 64, kernel_size=1) #no bn after conv, so bias=true
-
-        ##########################################
-        # private encoder, night
-        ##########################################
-        self.encoder_night = resnets[num_layers](pretrained)
-        self.conv_diff_night = nn.Conv2d(512, 64, kernel_size=1)
-
-        ######################################
-        # shared decoder (small decoder), use a simple de-conv to upsample the features with no skip connection
-        ######################################
-        self.convt5 = convt_bn_relu(in_channels=512,out_channels=256,kernel_size=3,stride=2,padding=1,output_padding=1)
-        self.convt4 = convt_bn_relu(in_channels=256,out_channels=128,kernel_size=3,stride=2,padding=1,output_padding=1)
-        self.convt3 = convt_bn_relu(in_channels=128,out_channels=64,kernel_size=3,stride=2,padding=1,output_padding=1)
-        self.convt2 = convt_bn_relu(in_channels=64,out_channels=64,kernel_size=3,stride=2,padding=1,output_padding=1)
-        self.convt1 = convt_bn_relu(in_channels=64, out_channels=64, kernel_size=3, stride=2, padding=1,output_padding=1)
-        self.convtf = nn.Conv2d(64,3,kernel_size=1,stride=1,padding=0)
-
+        
+        
+        
 
     def forward(self, input_image, is_night, istrain):
 
         if istrain=='train':
             result = []
             input_data = (input_image - 0.45) / 0.225
-            if is_night == 'day':
-                # source private encoder, day
-                private_feature = self.encoder_day.conv1(input_data)
-                private_feature = self.encoder_day.bn1(private_feature)
-                private_feature = self.encoder_day.relu(private_feature)
-                private_feature = self.encoder_day.maxpool(private_feature)
-                private_feature = self.encoder_day.layer1(private_feature)
-                private_feature = self.encoder_day.layer2(private_feature)
-                private_feature = self.encoder_day.layer3(private_feature)
-                private_feature = self.encoder_day.layer4(private_feature)
-                private_code = self.conv_diff_day(private_feature)
-                private_gram = gram_matrix(private_feature)
-                result.append(private_code)
-                result.append(private_gram)
-
-            elif is_night == 'night':
-                # target private encoder, night
-                private_feature = self.encoder_night.conv1(input_data)
-                private_feature = self.encoder_night.bn1(private_feature)
-                private_feature = self.encoder_night.relu(private_feature)
-                private_feature = self.encoder_night.maxpool(private_feature)
-                private_feature = self.encoder_night.layer1(private_feature)
-                private_feature = self.encoder_night.layer2(private_feature)
-                private_feature = self.encoder_night.layer3(private_feature)
-                private_feature = self.encoder_night.layer4(private_feature)
-                private_code = self.conv_diff_night(private_feature)
-
-                private_gram = gram_matrix(private_feature)
-                result.append(private_code)
-                result.append(private_gram)
 
 
         # shared encoder
@@ -203,28 +151,30 @@ class ResnetEncoder(nn.Module):
             x = self.conv1(x)
             x = self.bn1(x)
             self.features.append(self.relu(x))
-
+# some difference above, same below
         self.features.append(self.encoder.layer1(self.encoder.maxpool(self.features[-1])))
         self.features.append(self.encoder.layer2(self.features[-1]))
         self.features.append(self.encoder.layer3(self.features[-1]))
         self.features.append(self.encoder.layer4(self.features[-1]))
-
+        
         if istrain=='train':
-            shared_code = self.conv_shared(self.features[-1])
-            shared_gram = gram_matrix(self.features[-1])
-            result.append(shared_code)  # use this to calculate loss of ortho
-            result.append(shared_gram)
+#             shared_code = self.conv_shared(self.features[-1])
+#             shared_gram = gram_matrix(self.features[-1])
+#             result.append(shared_code)  # use this to calculate loss of ortho
+#             result.append(shared_gram)
             result.append(self.features[-1])  # use this to calculate loss of similarity
 
-            union_code = private_feature + self.features[-1]
-            rec_code = self.convt5(union_code)
-            rec_code = self.convt4(rec_code)
-            rec_code = self.convt3(rec_code)
-            rec_code = self.convt2(rec_code)
-            rec_code = self.convt1(rec_code)
-            rec_code = self.convtf(rec_code)
-            result.append(rec_code)
+#             union_code = private_feature + self.features[-1]
+#             rec_code = self.convt5(union_code)
+#             rec_code = self.convt4(rec_code)
+#             rec_code = self.convt3(rec_code)
+#             rec_code = self.convt2(rec_code)
+#             rec_code = self.convt1(rec_code)
+#             rec_code = self.convtf(rec_code)
+#             result.append(rec_code)
 
             return self.features, result
         else:
             return self.features
+        
+
