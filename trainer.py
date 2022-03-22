@@ -80,8 +80,8 @@ class Trainer:
         if self.opt.only_depth_encoder:
             self.opt.frame_ids = [0]
 #enoder type &num of layers
-            self.models["encoder"] = networks.ResnetEncoder(
-            self.opt.num_layers, self.opt.weights_init == "pretrained")
+        self.models["encoder"] = networks.ResnetEncoder(
+             self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
 
@@ -245,9 +245,9 @@ class Trainer:
 
         self.save_opts()
 
-        self.loss_ortho = OrthoLoss().cuda()
-        self.loss_recon1 = MSE().cuda()
-        self.loss_recon2 = SIMSE().cuda()
+#         self.loss_ortho = OrthoLoss().cuda()
+#         self.loss_recon1 = MSE().cuda()
+#         self.loss_recon2 = SIMSE().cuda()
         self.loss_similarity = MSE().cuda()
     
     def setup_seed(self,seed):
@@ -290,6 +290,8 @@ class Trainer:
                 f.write('epoch: '+str(self.epoch)) 
                 f.write("\n")        
             f.close()
+            
+#metrics output & save
             if not self.opt.only_depth_encoder:
                 mean_errors_day, mean_errors_night, mean_errors_all = self.run_epoch()
                 if (self.epoch + 1) % self.opt.save_frequency == 0:
@@ -340,14 +342,21 @@ class Trainer:
         for batch_idx, inputs in enumerate(self.train_loader):
 
             before_op_time = time.time()
-
-            outputs, outputs_night, losses, losses_day, losses_night = self.process_batch(inputs)
+            
+            if self.opt.use_init_pred:
+            
+                outputs, outputs_night, outputs_init, outputs_night_init, losses, losses_day, losses_night, losses_day_init, losses_night_init = self.process_batch(inputs)
+            else:
+                outputs, outputs_night, losses, losses_day, losses_night = self.process_batch(inputs)
 
             self.model_optimizer.zero_grad()
             if self.opt.only_depth_encoder:
                 losses.backward()
             else:
-                loss = losses + losses_day["loss"] + losses_night["loss"]
+                if self.opt.use_init_pred:
+                    loss = losses + losses_day["loss"] + losses_night["loss"] + losses_day_init["loss"] + losses_night_init["loss"]
+                else:
+                    loss = losses + losses_day["loss"] + losses_night["loss"]
                 loss.backward()
             self.model_optimizer.step()
 
@@ -359,12 +368,19 @@ class Trainer:
 
             # if early_phase or late_phase:
             if batch_idx % 10 == 0 and not self.opt.only_depth_encoder:
-                self.log_time(batch_idx, duration, losses_day["loss"].cpu().data+losses_night["loss"].cpu().data+losses.cpu().data)  
+                if self.opt.use_init_pred:
+                    self.log_time(batch_idx, duration, losses_day["loss"].cpu().data+losses_night["loss"].cpu().data+losses.cpu().data+losses_day_init["loss"].cpu().data+losses_night_init["loss"].cpu().data)  
+                else:
+                    self.log_time(batch_idx, duration, losses_day["loss"].cpu().data+losses_night["loss"].cpu().data+losses.cpu().data)
                 # self.log_time(batch_idx, duration, losses.cpu().data)
 
                 if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses_day)
                     self.compute_depth_losses(inputs, outputs_night, losses_night)
+                    if self.opt.use_init_pred:
+                        self.compute_depth_losses(inputs, outputs_init, losses_day_init)
+                        self.compute_depth_losses(inputs, outputs_night_init, losses_night_init)
+
 
             if batch_idx % 10 ==0 and self.opt.only_depth_encoder:
                 print("\n  " + ("{:>8} | " * 8).format("diff_day", "diff_night", "recon_day1", "recon_day2",
@@ -377,10 +393,16 @@ class Trainer:
         if not self.opt.only_depth_encoder:
             self.log("train", inputs, outputs, losses_day.items())
             self.log("train", inputs, outputs_night, losses_night.items())
+                if self.opt.use_init_pred:
+                    self.log("train", inputs, outputs_init, losses_day_init.items())
+                    self.log("train", inputs, outputs_night_init, losses_night_init.items())
+            
             self.step += 1
-
+            
+#two print here
             mean_errors_day = self.evaluate('day')
             mean_errors_night = self.evaluate('night')
+            
             mean_errors_all = (mean_errors_day + mean_errors_night) /2
             print("\n  " + ("{:>8} | " * 7).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3"))
             print(("&{: 8.3f}  " * 7).format(*mean_errors_all.tolist()) + "\\\\")
@@ -438,70 +460,79 @@ class Trainer:
             # Otherwise, we only feed the image with frame_id 0 through the depth encoder
             features, result = self.models["encoder"](inputs["color_aug", 0, 0],'day', 'train')
             features_night, result_night = self.models["encoder"](inputs["color_n_aug", 0, 0], 'night', 'train')
+            
+            
+            
+            if self.opt.use_SAB:
+                mask_day= self.models["SAB"](result[0])
+                mask_night= self.models["SAB"](result_night[0])
+                after_SAB_day=result[0]+mask_night
+                after_SAB_night=result_night[0]+mask_day   
+                result[0]=after_SAB_day
+                result_night[0]=after_SAB_night
+                features[-1]=after_SAB_day
+                features_night[-1]=after_SAB_night                
+                
+
 
             if not self.opt.only_depth_encoder:
-                outputs = self.models["depth"](features)
-                outputs_night = self.models["depth"](features_night)
+                outputs = self.models["depth_day"](features)
+                outputs_night = self.models["depth_night"](features_night)
+                
+            if self.opt.use_initial_pred:
+                outputs_init = self.models["initial_day"](features)
+                outputs_night_init = self.models["initial_night"](features_night)
+                
+                
 
         if self.opt.predictive_mask and not self.opt.only_depth_encoder:
             outputs["predictive_mask"] = self.models["predictive_mask"](features)
             outputs_night["predictive_mask"] = self.models["predictive_mask"](features_night)
 
+
         if self.use_pose_net and not self.opt.only_depth_encoder:
             outputs.update(self.predict_poses(inputs, features, 'day'))
             outputs_night.update(self.predict_poses(inputs, features_night, 'night'))
+            
+
 
             self.generate_images_pred(inputs, outputs, 'day')
             self.generate_images_pred(inputs, outputs_night, 'night')
-
+            self.generate_images_pred(inputs, outputs_init, 'day')
+            self.generate_images_pred(inputs, outputs_night_init, 'night')
+            
+            
+            
+#depth loss            
             losses_day = self.compute_losses(inputs, outputs, 'day')
             losses_night = self.compute_losses(inputs, outputs_night, 'night')
-
+            losses_day_init = self.compute_losses(inputs, outputs_init, 'day')
+            losses_night_init = self.compute_losses(inputs, outputs_night_init, 'night')
+            
+            
+            
         loss = 0
         losses = []
-        # ortho
-        target_ortho1 = 0.5 * self.loss_ortho(result[0], result[2])  # 10 when batchsize=1
-        target_ortho2 = 0.5 * self.loss_ortho(result_night[0], result_night[2])
-        losses.append(target_ortho1)
-        losses.append(target_ortho2)
-        loss += target_ortho1
-        loss += target_ortho2
         
-        target_ortho3 = 1 * self.loss_ortho(result[1], result[3])  # 10 when batchsize=1
-        target_ortho4 = 1 * self.loss_ortho(result_night[1], result_night[3])
-        losses.append(target_ortho3)
-        losses.append(target_ortho4)
-        loss += target_ortho3
-        loss += target_ortho4
-
-        # recon
-        target_mse = 1 * self.loss_recon1(result[5], inputs["color_aug", 0, 0])
-        loss += target_mse
-        target_simse = 1 * self.loss_recon2(result[5], inputs["color_aug", 0, 0])
-        loss += target_simse
-        losses.append(target_mse)
-        losses.append(target_simse)
-        target_mse_night = 1 * self.loss_recon1(result_night[5], inputs["color_n_aug", 0, 0])
-        loss += target_mse_night
-        target_simse_night = 1 * self.loss_recon2(result_night[5], inputs["color_n_aug", 0, 0])
-        loss += target_simse_night
-        losses.append(target_mse_night)
-        losses.append(target_simse_night)
-
+#similarity loss        
         
-        # depth loss
         pseudo_label = outputs[("disp", 0)].detach()
         depth_loss = 1 * self.loss_similarity(outputs_night[("disp", 0)], pseudo_label)
         loss += depth_loss
         losses.append(depth_loss)
-
         
+        pseudo_label_init = outputs_init[("disp", 0)].detach()
+        depth_loss_init = 1 * self.loss_similarity(outputs_night_init[("disp", 0)], pseudo_label_init)
+        loss += depth_loss_init
+        losses.append(depth_loss_init)
+
 
         if self.opt.only_depth_encoder:
             return losses, loss
         else:
-            return outputs, outputs_night, loss, losses_day, losses_night
-
+            return outputs, outputs_night, outputs_init, outputs_night_init, loss, losses_day, losses_night, losses_day_init, losses_night_init
+        
+        
     def predict_poses(self, inputs, features, is_night):
         """Predict poses between input frames for monocular sequences.
         """
