@@ -180,9 +180,9 @@ class Trainer:
         train_filenames = readlines(fpath.format("train"))
         # val_all_filenames = readlines(fpath.format("val_all"))
         val_day_filenames = readlines(fpath.format("val_day"))
-        val_fake_night_filenames = readlines(fpath.format("val_fake_night"))
+        
         val_night_filenames = readlines(fpath.format("val_night"))
-        val_fake_day_filenames = readlines(fpath.format("val_fake_day"))
+        
         img_ext = '.png' if self.opt.png else '.jpg'
 # counting
         num_train_samples = len(train_filenames)
@@ -664,13 +664,34 @@ class Trainer:
         with torch.no_grad():
             for data in dataloader:
                 input_color = data[("color", 0, 0)].cuda()
+                
+                input_color_n = data[("color_n", 0, 0)].cuda()
 
                 if self.opt.post_process:
                     # Post-processed results require each image to have two forward passes
                     input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
+                    input_color_n = torch.cat((input_color_n, torch.flip(input_color_n, [3])), 0)
+     
 
-                features = self.models["encoder"](input_color, split, 'val')
-                output = self.models["depth"](features)
+                features = self.models["encoder"](input_color, split, 'val')               
+                features_n = self.models["encoder"](input_color_n, split, 'val')
+            
+                if self.opt.use_SAB:
+                    mask_day= self.models["SAB"](result[0])
+                    mask_night= self.models["SAB"](result_night[0])
+                    after_SAB_day=result[0]+mask_night
+                    after_SAB_night=result_night[0]+mask_day   
+#                     result[0]=after_SAB_day
+#                     result_night[0]=after_SAB_night
+                    features[-1]=after_SAB_day
+                    features_night[-1]=after_SAB_night    
+        
+                if split=='day':
+                    output = self.models["depth_day"](features)
+                elif split=='night'
+                    output = self.models["depth_night"](features_night)
+                
+ 
 
                 pred_disp, _ = disp_to_depth(output[("disp", 0)], self.opt.min_depth, self.opt.max_depth)
                 pred_disp = pred_disp.cpu()[:, 0].numpy()
