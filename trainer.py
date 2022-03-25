@@ -79,6 +79,10 @@ class Trainer:
 
         if self.opt.only_depth_encoder:
             self.opt.frame_ids = [0]
+            
+            
+            
+        self.lamda1=float(self.opt.lamda_depth)
 #enoder type &num of layers
         self.models["encoder"] = networks.ResnetEncoder(
              self.opt.num_layers, self.opt.weights_init == "pretrained")
@@ -99,7 +103,7 @@ class Trainer:
             
             
 #initial decoder type & whether to use (day and night)
-        if self.opt.use_intial_pred:
+        if self.opt.use_init_pred:
             self.models["initial_day"] = networks.DepthDecoder(
                 self.models["encoder"].num_ch_enc, self.opt.scales)
             self.models["initial_day"].to(self.device)
@@ -201,7 +205,7 @@ class Trainer:
             [0], 4, is_train=False, img_ext=img_ext)
         self.val_day_loader = DataLoader(
             val_day_dataset, self.opt.batch_size, False,
-            num_workers=self.opt.num_workers, pin_memory=True, drop_last=False)
+            num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         self.val_iter_day = iter(self.val_day_loader)
 
 
@@ -210,7 +214,7 @@ class Trainer:
             [0], 4, is_train=False, img_ext=img_ext)
         self.val_night_loader = DataLoader(
             val_night_dataset, self.opt.batch_size, False,
-            num_workers=self.opt.num_workers, pin_memory=True, drop_last=False)
+            num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         self.val_iter_night = iter(self.val_night_loader)
 #tensorboard's summary writer
         self.writers = {}
@@ -348,15 +352,21 @@ class Trainer:
                 outputs, outputs_night, outputs_init, outputs_night_init, losses, losses_day, losses_night, losses_day_init, losses_night_init = self.process_batch(inputs)
             else:
                 outputs, outputs_night, losses, losses_day, losses_night = self.process_batch(inputs)
+#                 print('loss_sim')
+#                 print(losses)
+#                 print('loss_day')
+#                 print(losses_day)
+#                 print('loss_night')
+#                 print(losses_night)
 
             self.model_optimizer.zero_grad()
             if self.opt.only_depth_encoder:
                 losses.backward()
             else:
                 if self.opt.use_init_pred:
-                    loss = losses + losses_day["loss"] + losses_night["loss"] + losses_day_init["loss"] + losses_night_init["loss"]
+                    loss = losses + self.lamda1*losses_day["loss"] + self.lamda1*losses_night["loss"] + losses_day_init["loss"] + losses_night_init["loss"]
                 else:
-                    loss = losses + losses_day["loss"] + losses_night["loss"]
+                    loss = losses + self.lamda1*losses_day["loss"] + self.lamda1*losses_night["loss"]
                 loss.backward()
             self.model_optimizer.step()
 
@@ -369,9 +379,9 @@ class Trainer:
             # if early_phase or late_phase:
             if batch_idx % 10 == 0 and not self.opt.only_depth_encoder:
                 if self.opt.use_init_pred:
-                    self.log_time(batch_idx, duration, losses_day["loss"].cpu().data+losses_night["loss"].cpu().data+losses.cpu().data+losses_day_init["loss"].cpu().data+losses_night_init["loss"].cpu().data)  
+                    self.log_time(batch_idx, duration, self.lamda1*losses_day["loss"].cpu().data+self.lamda1*losses_night["loss"].cpu().data+losses.cpu().data+losses_day_init["loss"].cpu().data+losses_night_init["loss"].cpu().data)  
                 else:
-                    self.log_time(batch_idx, duration, losses_day["loss"].cpu().data+losses_night["loss"].cpu().data+losses.cpu().data)
+                    self.log_time(batch_idx, duration, self.lamda1*losses_day["loss"].cpu().data+self.lamda1*losses_night["loss"].cpu().data+losses.cpu().data)
                 # self.log_time(batch_idx, duration, losses.cpu().data)
 
                 if "depth_gt" in inputs:
@@ -393,9 +403,9 @@ class Trainer:
         if not self.opt.only_depth_encoder:
             self.log("train", inputs, outputs, losses_day.items())
             self.log("train", inputs, outputs_night, losses_night.items())
-                if self.opt.use_init_pred:
-                    self.log("train", inputs, outputs_init, losses_day_init.items())
-                    self.log("train", inputs, outputs_night_init, losses_night_init.items())
+            if self.opt.use_init_pred:
+                self.log("train", inputs, outputs_init, losses_day_init.items())
+                self.log("train", inputs, outputs_night_init, losses_night_init.items())
             
             self.step += 1
             
@@ -463,6 +473,18 @@ class Trainer:
             
             
             
+            if self.opt.use_init_pred:
+                outputs_init = self.models["initial_day"](features)
+                outputs_night_init = self.models["initial_night"](features_night)
+            
+            if self.opt.predictive_mask and self.opt.use_init_pred:
+                outputs_init["predictive_mask"] = self.models["predictive_mask"](features)
+                outputs_night_init["predictive_mask"] = self.models["predictive_mask"](features_night)
+            outputs_init.update(self.predict_poses(inputs, features, 'day'))
+            outputs_night_init.update(self.predict_poses(inputs, features_night, 'night'))
+            
+            
+            
             if self.opt.use_SAB:
                 mask_day= self.models["SAB"](result[0])
                 mask_night= self.models["SAB"](result_night[0])
@@ -479,9 +501,7 @@ class Trainer:
                 outputs = self.models["depth_day"](features)
                 outputs_night = self.models["depth_night"](features_night)
                 
-            if self.opt.use_initial_pred:
-                outputs_init = self.models["initial_day"](features)
-                outputs_night_init = self.models["initial_night"](features_night)
+
                 
                 
 
@@ -498,17 +518,21 @@ class Trainer:
 
             self.generate_images_pred(inputs, outputs, 'day')
             self.generate_images_pred(inputs, outputs_night, 'night')
-            self.generate_images_pred(inputs, outputs_init, 'day')
-            self.generate_images_pred(inputs, outputs_night_init, 'night')
+
             
             
             
 #depth loss            
             losses_day = self.compute_losses(inputs, outputs, 'day')
             losses_night = self.compute_losses(inputs, outputs_night, 'night')
-            losses_day_init = self.compute_losses(inputs, outputs_init, 'day')
-            losses_night_init = self.compute_losses(inputs, outputs_night_init, 'night')
-            
+            if self.opt.use_init_pred:
+
+                
+                self.generate_images_pred(inputs, outputs_init, 'day')
+                self.generate_images_pred(inputs, outputs_night_init, 'night')
+                losses_day_init = self.compute_losses(inputs, outputs_init, 'day')
+                losses_night_init = self.compute_losses(inputs, outputs_night_init, 'night')
+
             
             
         loss = 0
@@ -520,17 +544,19 @@ class Trainer:
         depth_loss = 1 * self.loss_similarity(outputs_night[("disp", 0)], pseudo_label)
         loss += depth_loss
         losses.append(depth_loss)
-        
-        pseudo_label_init = outputs_init[("disp", 0)].detach()
-        depth_loss_init = 1 * self.loss_similarity(outputs_night_init[("disp", 0)], pseudo_label_init)
-        loss += depth_loss_init
-        losses.append(depth_loss_init)
+        if self.opt.use_init_pred:
+            pseudo_label_init = outputs_init[("disp", 0)].detach()
+            depth_loss_init = 1 * self.loss_similarity(outputs_night_init[("disp", 0)], pseudo_label_init)
+            loss += depth_loss_init
+            losses.append(depth_loss_init)
 
 
         if self.opt.only_depth_encoder:
             return losses, loss
-        else:
+        elif self.opt.use_init_pred:
             return outputs, outputs_night, outputs_init, outputs_night_init, loss, losses_day, losses_night, losses_day_init, losses_night_init
+        else:
+            return outputs, outputs_night, loss, losses_day, losses_night
         
         
     def predict_poses(self, inputs, features, is_night):
@@ -641,8 +667,8 @@ class Trainer:
     def evaluate(self, split='day'):
         """Evaluates a pretrained model using a specified test set
         """
-        MIN_DEPTH = 1e-3
-        MAX_DEPTH = 80
+#         MIN_DEPTH = 1e-3
+#         MAX_DEPTH = 80
         self.set_eval()
 
         assert sum((self.opt.eval_mono, self.opt.eval_stereo)) == 1, \
@@ -673,23 +699,23 @@ class Trainer:
                     input_color_n = torch.cat((input_color_n, torch.flip(input_color_n, [3])), 0)
      
 
-                features = self.models["encoder"](input_color, split, 'val')               
+                features= self.models["encoder"](input_color, split, 'val')               
                 features_n = self.models["encoder"](input_color_n, split, 'val')
             
                 if self.opt.use_SAB:
-                    mask_day= self.models["SAB"](result[0])
-                    mask_night= self.models["SAB"](result_night[0])
-                    after_SAB_day=result[0]+mask_night
-                    after_SAB_night=result_night[0]+mask_day   
+                    mask_day= self.models["SAB"](features[-1])
+                    mask_night= self.models["SAB"](features_n[-1])
+                    after_SAB_day=features[-1]+mask_night
+                    after_SAB_night=features_n[-1]+mask_day   
 #                     result[0]=after_SAB_day
 #                     result_night[0]=after_SAB_night
                     features[-1]=after_SAB_day
-                    features_night[-1]=after_SAB_night    
+                    features_n[-1]=after_SAB_night    
         
                 if split=='day':
                     output = self.models["depth_day"](features)
-                elif split=='night'
-                    output = self.models["depth_night"](features_night)
+                elif split=='night':
+                    output = self.models["depth_night"](features_n)
                 
  
 
@@ -701,7 +727,10 @@ class Trainer:
                     pred_disp = self.batch_post_process_disparity(pred_disp[:N], pred_disp[N:, :, ::-1])
 
                 pred_disps.append(pred_disp)
+                #print(data['depth_gt'].shape)
                 gt.append(np.squeeze(data['depth_gt'].cpu().numpy()))
+                gt_1=np.squeeze(data['depth_gt'].cpu().numpy())
+                #print(gt_1.shape)
 
         pred_disps = np.concatenate(pred_disps)
         gt = np.concatenate(gt)
@@ -761,7 +790,7 @@ class Trainer:
             pred_depth = 1 / pred_disp
 
             if self.opt.eval_split == "eigen":
-                mask = np.logical_and(gt_depth > MIN_DEPTH, gt_depth < MAX_DEPTH)
+                mask = np.logical_and(gt_depth > self.opt.min_depth, gt_depth < self.opt.max_depth)
 
                 crop = np.array([0.40810811 * gt_height, 0.99189189 * gt_height,
                                  0.03594771 * gt_width, 0.96405229 * gt_width]).astype(np.int32)
@@ -786,8 +815,8 @@ class Trainer:
                 ratios.append(ratio)
                 pred_depth *= ratio
 
-            pred_depth[pred_depth < MIN_DEPTH] = MIN_DEPTH
-            pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
+            pred_depth[pred_depth < self.opt.min_depth] = self.opt.min_depth
+            pred_depth[pred_depth > self.opt.min_depth] = self.opt.min_depth
 
             errors.append(self.compute_errors(gt_depth, pred_depth))
 
