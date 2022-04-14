@@ -79,18 +79,27 @@ class Trainer:
 
         if self.opt.only_depth_encoder:
             self.opt.frame_ids = [0]
-            
-            
-            
+                      
         self.lamda1=float(self.opt.lamda_depth)
         self.lamda2=float(self.opt.lamda_init_depth)
         
+        
+        
 #enoder type &num of layers
-        self.models["encoder"] = networks.ResnetEncoder(
-             self.opt.num_layers, self.opt.weights_init == "pretrained")
-        self.models["encoder"].to(self.device)
-        self.parameters_to_train += list(self.models["encoder"].parameters())
-
+        if not use_siasiam:
+            self.models["encoder"] = networks.ResnetEncoder(
+                 self.opt.num_layers, self.opt.weights_init == "pretrained")
+            self.models["encoder"].to(self.device)
+            self.parameters_to_train += list(self.models["encoder"].parameters())
+        else:
+            dir=simsiam_res50
+            checkpoint = torch.load(dir,map_location=torch.device(self.device))
+            self.models["encoder"]=SimSiam(models.__dict__['resnet50'])
+            self.models["encoder"].load_state_dict(checkpoint['state_dict'])
+            self.models["encoder"].to(self.device)
+                if not frozen_siasiam_para:
+                    self.parameters_to_train += list(self.models["encoder"].parameters())
+                    
 #decoder type &num of layers (day & night)       
         if not self.opt.only_depth_encoder:
             self.models["depth_day"] = networks.DepthDecoder(
