@@ -31,12 +31,18 @@ class MonodepthOptions:
         self.parser.add_argument("--use_init_pred",
                                  default=False,
                                  help="whether to use intial predict head")
+        self.parser.add_argument("--use_siasiam",
+                                 default=False,
+                                 help="whether to use siasiam")     
         self.parser.add_argument("--use_SAB",
                                  default=False,
                                  help="whether to use SAB")
         self.parser.add_argument("--lamda_depth",
                                  default=1,
                                  help="coefficient of depth loss")
+        self.parser.add_argument("--lamda_init_depth",
+                                 default=1,
+                                 help="coefficient of inital depth loss")
         self.parser.add_argument("--split",
                                  type=str,
                                  help="which training split to use",
