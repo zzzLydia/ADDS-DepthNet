@@ -119,9 +119,13 @@ class Trainer:
             
 #SAB type & whether to use        
         if self.opt.use_SAB:
-            self.models["SAB"] = networks.SABlock()
-            self.models["SAB"].to(self.device)
-            self.parameters_to_train += list(self.models["SAB"].parameters())
+            self.models["SAB_day"] = networks.SABlock()
+            self.models["SAB_day"].to(self.device)
+            self.models["SAB_night"] = networks.SABlock()
+            self.models["SAB_night"].to(self.device)
+
+            self.parameters_to_train += list(self.models["SAB_day"].parameters())
+            self.parameters_to_train += list(self.models["SAB_night"].parameters())
 #pose network type    
         if self.use_pose_net and not self.opt.only_depth_encoder:
             if self.opt.pose_model_type == "separate_resnet":
@@ -476,18 +480,19 @@ class Trainer:
             if self.opt.use_init_pred:
                 outputs_init = self.models["initial_day"](features)
                 outputs_night_init = self.models["initial_night"](features_night)
+                outputs_init.update(self.predict_poses(inputs, features, 'day'))
+                outputs_night_init.update(self.predict_poses(inputs, features_night, 'night'))
             
             if self.opt.predictive_mask and self.opt.use_init_pred:
                 outputs_init["predictive_mask"] = self.models["predictive_mask"](features)
                 outputs_night_init["predictive_mask"] = self.models["predictive_mask"](features_night)
-            outputs_init.update(self.predict_poses(inputs, features, 'day'))
-            outputs_night_init.update(self.predict_poses(inputs, features_night, 'night'))
+
             
             
             
             if self.opt.use_SAB:
-                mask_day= self.models["SAB"](result[0])
-                mask_night= self.models["SAB"](result_night[0])
+                mask_day= self.models["SAB_day"](result[0])
+                mask_night= self.models["SAB_night"](result_night[0])
                 after_SAB_day=result[0]+mask_night
                 after_SAB_night=result_night[0]+mask_day   
                 result[0]=after_SAB_day
@@ -703,8 +708,8 @@ class Trainer:
                 features_n = self.models["encoder"](input_color_n, split, 'val')
             
                 if self.opt.use_SAB:
-                    mask_day= self.models["SAB"](features[-1])
-                    mask_night= self.models["SAB"](features_n[-1])
+                    mask_day= self.models["SAB_day"](features[-1])
+                    mask_night= self.models["SAB_night"](features_n[-1])
                     after_SAB_day=features[-1]+mask_night
                     after_SAB_night=features_n[-1]+mask_day   
 #                     result[0]=after_SAB_day
@@ -816,7 +821,7 @@ class Trainer:
                 pred_depth *= ratio
 
             pred_depth[pred_depth < self.opt.min_depth] = self.opt.min_depth
-            pred_depth[pred_depth > self.opt.min_depth] = self.opt.min_depth
+            pred_depth[pred_depth > self.opt.max_depth] = self.opt.max_depth
 
             errors.append(self.compute_errors(gt_depth, pred_depth))
 
@@ -1213,3 +1218,4 @@ class Trainer:
             self.model_optimizer.load_state_dict(optimizer_dict)
         else:
             print("Cannot find Adam weights so Adam is randomly initialized")
+
