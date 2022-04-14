@@ -33,7 +33,10 @@ class MonodepthOptions:
                                  help="whether to use intial predict head")
         self.parser.add_argument("--use_siasiam",
                                  default=False,
-                                 help="whether to use siasiam")     
+                                 help="whether to use siasiam")  
+        self.parser.add_argument("--frozen_siasiam_para",
+                                 default=True,
+                                 help="whether to train encoder from siasiam")         
         self.parser.add_argument("--use_SAB",
                                  default=False,
                                  help="whether to use SAB")
