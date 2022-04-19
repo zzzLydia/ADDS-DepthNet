@@ -103,16 +103,14 @@ class Trainer:
             
             
 #initial decoder type & whether to use (day and night)
-        if self.opt.use_init_pred:
-            self.models["initial_day"] = networks.DepthDecoder(
-                self.models["encoder"].num_ch_enc, self.opt.scales)
-            self.models["initial_day"].to(self.device)
-            self.parameters_to_train += list(self.models["initial_day"].parameters())
-            
-            self.models["initial_night"] = networks.DepthDecoder(
-                self.models["encoder"].num_ch_enc, self.opt.scales)
-            self.models["initial_night"].to(self.device)
-            self.parameters_to_train += list(self.models["initial_night"].parameters())
+        if self.opt.use_SAB:
+            self.models["SAB_day"]=networks.SABlock(self.models["encoder"].num_ch_enc[-1],self.models["encoder"].num_ch_enc[-1])
+            self.models["SAB_day"].to(self.device)
+            self.models["SAB_night"] = networks.SABlock(self.models["encoder"].num_ch_enc[-1],self.models["encoder"].num_ch_enc[-1])
+            self.models["SAB_night"].to(self.device)
+
+            self.parameters_to_train += list(self.models["SAB_day"].parameters())
+            self.parameters_to_train += list(self.models["SAB_night"].parameters())
             
             
             
