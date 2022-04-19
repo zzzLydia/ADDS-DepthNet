@@ -10,7 +10,7 @@ import torchvision.models as models
 
 class SABlock(nn.Module):
     """ Spatial self-attention block """
-    def __init__(self, in_channels=512, out_channels=512):
+    def __init__(self, in_channels, out_channels):
         super(SABlock, self).__init__()
         self.attention = nn.Sequential(nn.Conv2d(in_channels, out_channels, 3, padding=1, bias=False),
                                         nn.Sigmoid())
