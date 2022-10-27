@@ -267,15 +267,18 @@ def predict_poses(inputs):
 
 
 
-def generate_images_pred(inputs, outputs):
+def generate_images_pred(self, inputs, outputs):
     """Generate the warped (reprojected) color images for a minibatch.
     Generated images are saved into the `outputs` dictionary.
     """
     for scale in self.opt.scales:
         disp = outputs[("disp", scale)]
-
-        source_scale = scale
-
+        if self.opt.v1_multiscale:
+            source_scale = scale
+        else:
+            disp = F.interpolate(
+                disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+            source_scale = 0
 
         _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
 
@@ -283,17 +286,18 @@ def generate_images_pred(inputs, outputs):
 
         for i, frame_id in enumerate(self.opt.frame_ids[1:]):
 
-
+  
             T = outputs[("cam_T_cam", 0, frame_id)]
 
-            cam_points = backproject_depth[source_scale](
+
+            cam_points = self.backproject_depth[source_scale](
                 depth, inputs[("inv_K", source_scale)])
-            pix_coords = project_3d[source_scale](
+            pix_coords = self.project_3d[source_scale](
                 cam_points, inputs[("K", source_scale)], T)
 
             outputs[("sample", frame_id, scale)] = pix_coords
 
-
+            
             outputs[("color_n", frame_id, scale)] = F.grid_sample(
                 inputs[("color_n", frame_id, source_scale)],
                 outputs[("sample", frame_id, scale)],
@@ -303,80 +307,115 @@ def generate_images_pred(inputs, outputs):
                 inputs[("color", frame_id, source_scale)],
                 outputs[("sample", frame_id, scale)],
                 padding_mode="border")
-            
-            if not opt.disable_automasking:
-                if is_night:
-                    outputs[("color_identity", frame_id, scale)]=\
+
+            if not self.opt.disable_automasking:
+                
+                outputs[("color_n_identity", frame_id, scale)] = \
                     inputs[("color_n", frame_id, source_scale)]
-                else:
-                    outputs[("color_identity", frame_id, scale)]=\
+
+                outputs[("color_identity", frame_id, scale)] = \
                     inputs[("color", frame_id, source_scale)]
             
-            
 def compute_losses(self, inputs, outputs, is_night):
-    """Compute the reprojection and smoothness losses for a minibatch
-    """
-    losses = {}
-    total_loss = 0
+        """Compute the reprojection and smoothness losses for a minibatch
+        """
+        losses = {}
+        total_loss = 0
 
-    for scale in self.opt.scales:
-        loss = 0
-        reprojection_losses = []
+        for scale in self.opt.scales:
+            loss = 0
+            reprojection_losses = []
 
-        source_scale = 0
-        
-        disp = outputs[("disp", scale)]
-        if is_night:
-            color = inputs[("color_n", 0, scale)]
-            target = inputs[("color_n", 0, source_scale)]
-            pred = outputs[("color_n", frame_id, scale)]
-            reprojection_losses.append(compute_reprojection_loss(pred, target))
-        else:
-            color = inputs[("color", 0, scale)]
-            target = inputs[("color", 0, source_scale)]
-            pred = outputs[("color", frame_id, scale)]
-            reprojection_losses.append(compute_reprojection_loss(pred, target))
+            if self.opt.v1_multiscale:
+                source_scale = scale
+            else:
+                source_scale = 0
 
-#         for frame_id in self.opt.frame_ids[1:]:
-#             pred = outputs[("color", frame_id, scale)]
-#             reprojection_losses.append(compute_reprojection_loss(pred, target))
+            disp = outputs[("disp", scale)]
+            if is_night:
+                color = inputs[("color_n", 0, scale)]
+                target = inputs[("color_n", 0, source_scale)]
+            else:
+                color = inputs[("color", 0, scale)]
+                target = inputs[("color", 0, source_scale)]
 
-        reprojection_losses = torch.cat(reprojection_losses, 1)
+            for frame_id in self.opt.frame_ids[1:]:
+                if is_night:
+                    pred = outputs[("color_n", frame_id, scale)]
+                else:
+                    pred = outputs[("color", frame_id, scale)]
+                reprojection_losses.append(self.compute_reprojection_loss(pred, target))
 
-        
-        if self.opt.predictive_mask:
-            # use the predicted mask
-            mask = outputs["predictive_mask"]["disp", scale]
-            reprojection_losses *= mask
+            reprojection_losses = torch.cat(reprojection_losses, 1)
 
-            # add a loss pushing mask to 1 (using nn.BCELoss for stability)
-            weighting_loss = 0.2 * nn.BCELoss()(mask, torch.ones(mask.shape).cuda())
-            loss += weighting_loss.mean()
+            if not self.opt.disable_automasking:
+                identity_reprojection_losses = []
+                for frame_id in self.opt.frame_ids[1:]:
+                    if is_night:
+                        pred = inputs[("color_n", frame_id, source_scale)]
+                    else:
+                        pred = inputs[("color", frame_id, source_scale)]
+                    identity_reprojection_losses.append(
+                        self.compute_reprojection_loss(pred, target))
 
+                identity_reprojection_losses = torch.cat(identity_reprojection_losses, 1)
 
-        reprojection_loss = reprojection_losses.mean(1, keepdim=True)
+                if self.opt.avg_reprojection:
+                    identity_reprojection_loss = identity_reprojection_losses.mean(1, keepdim=True)
+                else:
+                    # save both images, and do min all at once below
+                    identity_reprojection_loss = identity_reprojection_losses
 
-        combined = reprojection_loss
+            elif self.opt.predictive_mask:
+                # use the predicted mask
+                mask = outputs["predictive_mask"]["disp", scale]
+                if not self.opt.v1_multiscale:
+                    mask = F.interpolate(
+                        mask, [self.opt.height, self.opt.width],
+                        mode="bilinear", align_corners=False)
 
-        if combined.shape[1] == 1:
-            to_optimise = combined
-        else:
-            to_optimise, idxs = torch.min(combined, dim=1)
+                reprojection_losses *= mask
 
+                # add a loss pushing mask to 1 (using nn.BCELoss for stability)
+                weighting_loss = 0.2 * nn.BCELoss()(mask, torch.ones(mask.shape).cuda())
+                loss += weighting_loss.mean()
 
-        loss += to_optimise.mean()
+            if self.opt.avg_reprojection:
+                reprojection_loss = reprojection_losses.mean(1, keepdim=True)
+            else:
+                reprojection_loss = reprojection_losses
 
-        mean_disp = disp.mean(2, True).mean(3, True)
-        norm_disp = disp / (mean_disp + 1e-7)
-        smooth_loss = get_smooth_loss(norm_disp, color)
+            if not self.opt.disable_automasking:
+                # add random numbers to break ties
+                identity_reprojection_loss += torch.randn(
+                    identity_reprojection_loss.shape).cuda() * 0.00001
 
-        loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
-        total_loss += loss
-        losses["loss/{}".format(scale)] = loss
-    #loss we want
-    total_loss /= self.num_scales
-    losses["loss"] = total_loss
-    return losses
+                combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
+            else:
+                combined = reprojection_loss
+
+            if combined.shape[1] == 1:
+                to_optimise = combined
+            else:
+                to_optimise, idxs = torch.min(combined, dim=1)
+
+            if not self.opt.disable_automasking:
+                outputs["identity_selection/{}".format(scale)] = (
+                    idxs > identity_reprojection_loss.shape[1] - 1).float()
+
+            loss += to_optimise.mean()
+
+            mean_disp = disp.mean(2, True).mean(3, True)
+            norm_disp = disp / (mean_disp + 1e-7)
+            smooth_loss = get_smooth_loss(norm_disp, color)
+
+            loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
+            total_loss += loss
+            losses["loss/{}".format(scale)] = loss
+
+        total_loss /= self.num_scales
+        losses["loss"] = total_loss
+        return losses            
 
 
 def compute_reprojection_loss(pred, target):
@@ -393,12 +432,16 @@ def compute_reprojection_loss(pred, target):
 
     return reprojection_loss
 
-
-def evaluate(split='day'):
+def evaluate(self, split='day'):
     """Evaluates a pretrained model using a specified test set
     """
+    MIN_DEPTH = 1e-3
+    MAX_DEPTH = 80
+    self.set_eval()
 
-    model.eval()
+    assert sum((self.opt.eval_mono, self.opt.eval_stereo)) == 1, \
+        "Please choose mono or stereo evaluation by setting either --eval_mono or --eval_stereo"
+
 
     pred_disps = []
     gt = []
@@ -406,34 +449,22 @@ def evaluate(split='day'):
         self.opt.width, self.opt.height))
 
     if split=='day':
-        dataloader = val_day_loader
+        dataloader = self.val_day_loader
         val_split = 'val_day'
     elif split =='night':
-        dataloader = val_night_loader
+        dataloader = self.val_night_loader
         val_split = 'val_night'
 
     with torch.no_grad():
         for data in dataloader:
             input_color = data[("color", 0, 0)].cuda()
 
-            input_color_n = data[("color_n", 0, 0)].cuda()
-
             if self.opt.post_process:
                 # Post-processed results require each image to have two forward passes
                 input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
-                input_color_n = torch.cat((input_color_n, torch.flip(input_color_n, [3])), 0)
 
-
-            features= self.models["encoder"](input_color, split, 'val')               
-            features_n = self.models["encoder"](input_color_n, split, 'val')
-
-
-            if split=='day':
-                output = self.models["depth_day"](features)
-            elif split=='night':
-                output = self.models["depth_night"](features_n)
-
-
+            features = self.models["encoder"](input_color, split, 'val')
+            output = self.models["depth"](features)
 
             pred_disp, _ = disp_to_depth(output[("disp", 0)], self.opt.min_depth, self.opt.max_depth)
             pred_disp = pred_disp.cpu()[:, 0].numpy()
@@ -443,10 +474,7 @@ def evaluate(split='day'):
                 pred_disp = self.batch_post_process_disparity(pred_disp[:N], pred_disp[N:, :, ::-1])
 
             pred_disps.append(pred_disp)
-            #print(data['depth_gt'].shape)
             gt.append(np.squeeze(data['depth_gt'].cpu().numpy()))
-            gt_1=np.squeeze(data['depth_gt'].cpu().numpy())
-            #print(gt_1.shape)
 
     pred_disps = np.concatenate(pred_disps)
     gt = np.concatenate(gt)
@@ -458,10 +486,8 @@ def evaluate(split='day'):
         print("-> Saving predicted disparities to ", output_path)
         np.save(output_path, pred_disps)
 
-    if self.opt.no_eval:
-        print("-> Evaluation disabled. Done.")
-        quit()
-
+    # gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
+    # gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1')["data"]
 
     print("-> Evaluating")
 
@@ -486,7 +512,7 @@ def evaluate(split='day'):
         pred_depth = 1 / pred_disp
 
         if self.opt.eval_split == "eigen":
-            mask = np.logical_and(gt_depth > self.opt.min_depth, gt_depth < self.opt.max_depth)
+            mask = np.logical_and(gt_depth > MIN_DEPTH, gt_depth < MAX_DEPTH)
 
             crop = np.array([0.40810811 * gt_height, 0.99189189 * gt_height,
                              0.03594771 * gt_width, 0.96405229 * gt_width]).astype(np.int32)
@@ -511,8 +537,8 @@ def evaluate(split='day'):
             ratios.append(ratio)
             pred_depth *= ratio
 
-        pred_depth[pred_depth < self.opt.min_depth] = self.opt.min_depth
-        pred_depth[pred_depth > self.opt.max_depth] = self.opt.max_depth
+        pred_depth[pred_depth < MIN_DEPTH] = MIN_DEPTH
+        pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
 
         errors.append(self.compute_errors(gt_depth, pred_depth))
 
