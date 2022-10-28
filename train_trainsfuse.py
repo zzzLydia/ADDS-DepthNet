@@ -84,79 +84,18 @@ def train(train_loader, test_loader, model, optimizer, epoch, best_loss, device)
                   format(datetime.now(), epoch, opt.epoch, i, total_step,
                          loss_record2.show(), loss_record3.show(), loss_record4.show()))
 
+        mean_errors_day = self.evaluate('day')
+        mean_errors_night = self.evaluate('night')
+        mean_errors_all = (mean_errors_day + mean_errors_night) /2
+        print("\n  " + ("{:>8} | " * 7).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3"))
+        print(("&{: 8.3f}  " * 7).format(*mean_errors_all.tolist()) + "\\\\")
+        print("\n-> Done!")
+    return mean_errors_day, mean_errors_night, mean_errors_all
 
-    return errors
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -235,19 +174,44 @@ if __name__ == '__main__':
     total_step = len(train_loader)
     device=opt.device
 
-    best_loss = 1e5
+    best_absrel = best_sqrel = best_rmse = best_rmse_log = np.inf
+    best_a1 = best_a2 = best_a3 = 0
+    best_epoch = 0
     for epoch in range(1, opt.epoch + 1):
         #print('aaaaaaaaaaaaaaaaaaaaaaaaaaa')
-        best_loss = train(train_loader, test_loader,  model, optimizer, epoch, best_loss, device)
+
+        mean_errors_day, mean_errors_night, mean_errors_all = train(train_loader, test_loader,  model, optimizer, epoch, best_loss, device)
+
+        mean_errors = []
+        if best_rmse > mean_errors_all[2]:
+            best_epoch = self.epoch
+            best_absrel = mean_errors_all[0]
+            best_sqrel = mean_errors_all[1]
+            best_rmse = mean_errors_all[2]
+            best_rmse_log = mean_errors_all[3]
+            best_a1 = mean_errors_all[4]
+            best_a2 = mean_errors_all[5]
+            best_a3 = mean_errors_all[6]
+        mean_errors.append(best_absrel)
+        mean_errors.append(best_sqrel)
+        mean_errors.append(best_rmse)
+        mean_errors.append(best_rmse_log)
+        mean_errors.append(best_a1)
+        mean_errors.append(best_a2)
+        mean_errors.append(best_a3)
+        print('best results is %d epoch:' % best_epoch)
+        print("\n  " + ("{:>8} | " * 7).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3"))
+        print(("&{: 8.3f}  " * 7).format(*mean_errors) + "\\\\")
+        print("\n-> Done!")
         
 def predict_poses(inputs):
     """Predict poses between input frames for monocular sequences.
     """
     outputs = {}
 
-    pose_feats = {f_i: inputs["color_aug", f_i, 0] for f_i in self.opt.frame_ids}
+    pose_feats = {f_i: inputs["color_aug", f_i, 0] for f_i in opt.frame_ids}
 
-    for f_i in self.opt.frame_ids[1:]:
+    for f_i in opt.frame_ids[1:]:
                     # To maintain ordering we always pass frames in temporal order
         if f_i < 0:
             pose_inputs = [pose_feats[f_i], pose_feats[0]]
@@ -267,13 +231,13 @@ def predict_poses(inputs):
 
 
 
-def generate_images_pred(self, inputs, outputs):
+def generate_images_pred(inputs, outputs):
     """Generate the warped (reprojected) color images for a minibatch.
     Generated images are saved into the `outputs` dictionary.
     """
-    for scale in self.opt.scales:
+    for scale in opt.scales:
         disp = outputs[("disp", scale)]
-        if self.opt.v1_multiscale:
+        if opt.v1_multiscale:
             source_scale = scale
         else:
             disp = F.interpolate(
@@ -316,7 +280,7 @@ def generate_images_pred(self, inputs, outputs):
                 outputs[("color_identity", frame_id, scale)] = \
                     inputs[("color", frame_id, source_scale)]
             
-def compute_losses(self, inputs, outputs, is_night):
+def compute_losses(inputs, outputs, is_night):
         """Compute the reprojection and smoothness losses for a minibatch
         """
         losses = {}
@@ -432,12 +396,12 @@ def compute_reprojection_loss(pred, target):
 
     return reprojection_loss
 
-def evaluate(self, split='day'):
+def evaluate(split='day'):
     """Evaluates a pretrained model using a specified test set
     """
     MIN_DEPTH = 1e-3
     MAX_DEPTH = 80
-    self.set_eval()
+    model.eval()
 
     assert sum((self.opt.eval_mono, self.opt.eval_stereo)) == 1, \
         "Please choose mono or stereo evaluation by setting either --eval_mono or --eval_stereo"
@@ -457,16 +421,15 @@ def evaluate(self, split='day'):
 
     with torch.no_grad():
         for data in dataloader:
-            input_color = data[("color", 0, 0)].cuda()
+            #input_color = data[("color", 0, 0)].cuda()
 
             if self.opt.post_process:
                 # Post-processed results require each image to have two forward passes
                 input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
+            
+            output = model(data["color", 0, 0], data["color_n", 0, 0])
 
-            features = self.models["encoder"](input_color, split, 'val')
-            output = self.models["depth"](features)
-
-            pred_disp, _ = disp_to_depth(output[("disp", 0)], self.opt.min_depth, self.opt.max_depth)
+            pred_disp, _ = disp_to_depth(output, self.opt.min_depth, self.opt.max_depth)
             pred_disp = pred_disp.cpu()[:, 0].numpy()
 
             if self.opt.post_process:
@@ -565,3 +528,23 @@ def evaluate(self, split='day'):
 
     self.set_train()
     return mean_errors
+
+def compute_errors(gt, pred):
+    """Computation of error metrics between predicted and ground truth depths
+    """
+    thresh = np.maximum((gt / pred), (pred / gt))
+    a1 = (thresh < 1.25).mean()
+    a2 = (thresh < 1.25 ** 2).mean()
+    a3 = (thresh < 1.25 ** 3).mean()
+
+    rmse = (gt - pred) ** 2
+    rmse = np.sqrt(rmse.mean())
+
+    rmse_log = (np.log(gt) - np.log(pred)) ** 2
+    rmse_log = np.sqrt(rmse_log.mean())
+
+    abs_rel = np.mean(np.abs(gt - pred) / gt)
+
+    sq_rel = np.mean(((gt - pred) ** 2) / gt)
+
+    return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
